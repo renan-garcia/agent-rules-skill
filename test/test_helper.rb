@@ -13,8 +13,19 @@ require "open3"
 # real, validating the adapters generated under .cursor/, .claude/ and .codex/.
 class SyncTestCase < Minitest::Test
   SKILL_ROOT   = File.expand_path("..", __dir__)
-  SYNC_SCRIPT  = File.join(SKILL_ROOT, "templates", "sync-agent-config")
   SYNC_ON_EDIT = File.join(SKILL_ROOT, "templates", "sync-on-edit.sh")
+
+  # The suite runs against each language port so they stay in behavioural
+  # parity. Select one with SYNC_RUNTIME=ruby|python|node (default: ruby).
+  RUNTIMES = {
+    "ruby"   => { interpreter: "ruby",    template: "sync-agent-config" },
+    "python" => { interpreter: "python3", template: "sync-agent-config.py" },
+    "node"   => { interpreter: "node",    template: "sync-agent-config.js" }
+  }.freeze
+
+  def runtime
+    RUNTIMES.fetch(ENV.fetch("SYNC_RUNTIME", "ruby"))
+  end
 
   def setup
     @project = Dir.mktmpdir("ars-test-")
@@ -22,8 +33,22 @@ class SyncTestCase < Minitest::Test
     FileUtils.mkdir_p(File.join(@project, ".agents", "rules"))
     FileUtils.mkdir_p(File.join(@project, ".agents", "agents"))
     FileUtils.mkdir_p(File.join(@project, ".agents", "hooks"))
-    FileUtils.cp(SYNC_SCRIPT, File.join(@project, "bin", "sync-agent-config"))
+    source = File.join(SKILL_ROOT, "templates", runtime[:template])
+    FileUtils.cp(source, File.join(@project, "bin", "sync-agent-config"))
     FileUtils.chmod(0o755, File.join(@project, "bin", "sync-agent-config"))
+
+    # The suite overrides HOME to isolate the global installer config from
+    # platform resolution. On machines that manage interpreters with a
+    # version manager rooted at $HOME (e.g. asdf), that override would stop
+    # the interpreter from resolving. Bridge the real toolchain into the fake
+    # home so python3/node/ruby still run. Harmless where it does not exist.
+    fake_home = File.join(@project, ".home")
+    FileUtils.mkdir_p(fake_home)
+    real_home = Dir.home
+    %w[.asdf .tool-versions].each do |entry|
+      real = File.join(real_home, entry)
+      FileUtils.ln_s(real, File.join(fake_home, entry)) if File.exist?(real)
+    end
   end
 
   def teardown
@@ -66,7 +91,7 @@ class SyncTestCase < Minitest::Test
     # Isolate the environment so the machine's global config / env vars never
     # leak into the platform resolution chain (keeps the suite hermetic).
     base = { "HOME" => File.join(@project, ".home"), "AGENT_PLATFORMS" => nil }
-    Open3.capture3(base.merge(env), "ruby", "bin/sync-agent-config", *args, chdir: @project)
+    Open3.capture3(base.merge(env), runtime[:interpreter], "bin/sync-agent-config", *args, chdir: @project)
   end
 
   # ── Generated artifact readers ─────────────────────────────────────────────

@@ -265,12 +265,27 @@ Fill in the TODO sections with real project information:
 
 ## Step 5 — Install the sync script and automations
 
+`bin/sync-agent-config` ships in three behaviourally identical ports: the Ruby
+reference (`sync-agent-config`), a Node port (`sync-agent-config.js`), and a
+Python 3 port (`sync-agent-config.py`). Copy the one matching the `runtime`
+saved by the installer in `~/.config/agent-rules-skill/config.json` (falls back
+to the Ruby reference when unset):
+
 ```bash
-cp <package>/templates/sync-agent-config bin/sync-agent-config
+# runtime → template: ruby=sync-agent-config, node=sync-agent-config.js, python=sync-agent-config.py
+runtime="$(python3 -c 'import json,os,sys;print(json.load(open(os.path.expanduser("~/.config/agent-rules-skill/config.json"))).get("runtime","ruby"))' 2>/dev/null || echo ruby)"
+case "$runtime" in
+  node)   src=sync-agent-config.js ;;
+  python) src=sync-agent-config.py ;;
+  *)      src=sync-agent-config    ;;
+esac
+cp "<package>/templates/$src" bin/sync-agent-config
 chmod +x bin/sync-agent-config
 ```
 
-The script accepts `--platforms` and reads installer preferences automatically.
+The destination is always `bin/sync-agent-config`; the copied file's shebang
+selects the interpreter. All ports accept `--platforms` / `--check` and read the
+same installer preferences automatically.
 
 ### Auto-sync hook (all platforms)
 

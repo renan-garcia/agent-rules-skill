@@ -20,6 +20,10 @@ The interactive installer asks:
   target only.
 - **Generation platforms** — which platforms `sync-agent-config` generates for:
   Cursor, Claude Code, Codex, opencode (multi-select, saved as your default)
+- **Sync runtime** — which interpreter runs `bin/sync-agent-config`: `auto`
+  (default — detects an available runtime), `ruby`, `node`, or `python`. All
+  three ports are behaviourally identical; pick one whose runtime your machines
+  already have.
 
 To install into a tool without the interactive prompt (example for Cursor + opencode):
 
@@ -117,7 +121,9 @@ agent-rules-skill/
 ├── install.sh                      ← interactive installer (self-contained gum)
 ├── README.md                       ← this file
 ├── templates/
-│   ├── sync-agent-config           ← Ruby sync script (copy to bin/)
+│   ├── sync-agent-config           ← sync script, Ruby reference (copy to bin/)
+│   ├── sync-agent-config.js        ← sync script, Node port (equivalent)
+│   ├── sync-agent-config.py        ← sync script, Python 3 port (equivalent)
 │   ├── sync-on-edit.sh             ← shell hook: auto-sync on .agents/** edit (Cursor/Claude/Codex)
 │   ├── pre-commit                  ← Git hook: block commits when adapters drift
 │   ├── AGENTS.md.template          ← project entrypoint template

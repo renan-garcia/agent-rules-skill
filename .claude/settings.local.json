@@ -4,7 +4,22 @@
       "Read(//Users/renan/Desktop/teste/**)",
       "Bash(ls -la .git/hooks/pre-commit)",
       "Bash(rake test *)",
-      "WebFetch(domain:cursor.com)"
+      "WebFetch(domain:cursor.com)",
+      "Bash(\" test/*.rb | head -20; echo \"---TESTLINES---\"; wc -l test/*.rb)",
+      "Bash(grep -rn \"sync-agent-config\\\\|ruby\\\\|system\\\\|backtick\\\\|`\" test/*.rb | head -20; echo \"---TESTLINES---\"; wc -l test/*.rb)",
+      "Read(//Users/renan/.config/agent-rules-skill/**)",
+      "Bash(SYNC_RUNTIME=python rake test)",
+      "Bash(SYNC_RUNTIME=node rake test)",
+      "Bash(SYNC_RUNTIME=ruby rake test)",
+      "Bash(bash -n install.sh)",
+      "Bash(bash -c ' *)",
+      "Bash(rake test:parity)",
+      "Bash(cat)",
+      "Bash(bash /tmp/rt_probe.sh)",
+      "Bash(awk '/^resolve_runtime\\\\\\(\\\\\\)/{f=1} f{print} /^}/{if\\(f\\)c++} c==3{exit}' install.sh)",
+      "Read(//tmp/**)",
+      "Bash(bash -c 'source /tmp/rt_funcs.sh; for c in auto ruby node python; do r=\"$\\(resolve_runtime \"$c\"\\)\"; echo \"$c -> runtime=$r template=$\\(runtime_template \"$r\"\\) interp=$\\(runtime_interpreter \"$r\"\\)\"; done')",
+      "Bash(chmod +x templates/sync-agent-config.py templates/sync-agent-config.js)"
     ]
   }
 }

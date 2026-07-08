@@ -17,6 +17,39 @@ SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
+# Concrete runtime that runs bin/sync-agent-config. "auto" resolves to the first
+# interpreter found on this machine, preferring the Ruby reference.
+resolve_runtime() {
+  case "$1" in
+    ruby|node|python) echo "$1"; return ;;
+  esac
+  local candidate
+  for candidate in ruby node python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      [[ "$candidate" == "python3" ]] && echo "python" || echo "$candidate"
+      return
+    fi
+  done
+  echo "ruby"
+}
+
+# Template file + interpreter binary for a concrete runtime.
+runtime_template() {
+  case "$1" in
+    node)   echo "sync-agent-config.js" ;;
+    python) echo "sync-agent-config.py" ;;
+    *)      echo "sync-agent-config"    ;;
+  esac
+}
+
+runtime_interpreter() {
+  case "$1" in
+    node)   echo "node"    ;;
+    python) echo "python3" ;;
+    *)      echo "ruby"    ;;
+  esac
+}
+
 detect_platform() {
   local os arch
   case "$(uname -s)" in
@@ -216,11 +249,45 @@ PLATFORMS_DISPLAY=${PLATFORMS_DISPLAY%, }
 TOOLS_DISPLAY=$(printf '%s, ' "${INSTALL_TOOLS[@]}")
 TOOLS_DISPLAY=${TOOLS_DISPLAY%, }
 
-# ── 4. Review ─────────────────────────────────────────────────────────────────
+# ── 4. Sync runtime ───────────────────────────────────────────────────────────
+# bin/sync-agent-config ships in three interpreter ports (Ruby reference, Node,
+# Python). They are behaviourally identical; pick the one whose runtime the
+# project's machines already have. "auto" resolves to the first found here.
+section "🧰 Which runtime should run bin/sync-agent-config?"
+muted "all ports are equivalent — auto picks the first interpreter found on this machine"
+
+RUNTIME_RAW=$("$GUM" choose \
+  "auto — detect an available runtime (recommended)" \
+  "ruby — reference implementation" \
+  "node — Node.js port" \
+  "python — Python 3 port")
+
+case "$RUNTIME_RAW" in
+  ruby*)   RUNTIME_CHOICE="ruby"   ;;
+  node*)   RUNTIME_CHOICE="node"   ;;
+  python*) RUNTIME_CHOICE="python" ;;
+  *)       RUNTIME_CHOICE="auto"   ;;
+esac
+
+RUNTIME="$(resolve_runtime "$RUNTIME_CHOICE")"
+RUNTIME_BIN="$(runtime_interpreter "$RUNTIME")"
+
+if ! command -v "$RUNTIME_BIN" >/dev/null 2>&1; then
+  warn "'$RUNTIME_BIN' is not on PATH — install it before running bin/sync-agent-config."
+fi
+
+if [[ "$RUNTIME_CHOICE" == "auto" ]]; then
+  RUNTIME_DISPLAY="auto → $RUNTIME"
+else
+  RUNTIME_DISPLAY="$RUNTIME"
+fi
+
+# ── 5. Review ─────────────────────────────────────────────────────────────────
 section "🔎 Review"
 kv "Scope" "${SCOPE%% —*}"
 kv "Install" "$TOOLS_DISPLAY"
 kv "Generate" "$PLATFORMS_DISPLAY"
+kv "Runtime" "$RUNTIME_DISPLAY"
 [[ "$SCOPE_KIND" == "project" ]] && kv "Project" "$PROJECT_PATH"
 echo
 
@@ -262,6 +329,8 @@ cat > "$CONFIG_FILE" <<EOF
   "platforms": $PLATFORMS_JSON,
   "install_scope": "$SCOPE_KIND",
   "install_targets": "$TOOLS_DISPLAY",
+  "runtime": "$RUNTIME",
+  "runtime_choice": "$RUNTIME_CHOICE",
   "skill_source": "$SKILL_DIR"
 }
 EOF
@@ -297,6 +366,7 @@ done
 $("$GUM" style --foreground 252 --bold '📦 Installed into')
 ${SUMMARY_ROWS}
 $("$GUM" style --foreground 252 "$(printf '⚙️  %-14s %s' 'Generates for' "$PLATFORMS_DISPLAY")")
+$("$GUM" style --foreground 252 "$(printf '🧰 %-14s %s' 'Sync runtime' "$RUNTIME_DISPLAY  (bin/$(runtime_template "$RUNTIME"))")")
 $("$GUM" style --foreground 240 "$(printf '📄 %-14s %s' 'Config' "$CONFIG_FILE")")"
 
 # ── 8. Next steps (optional) ──────────────────────────────────────────────────
