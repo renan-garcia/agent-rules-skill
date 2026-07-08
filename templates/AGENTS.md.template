@@ -1,0 +1,57 @@
+# AGENTS.md
+
+This is the portable project entrypoint for AI coding agents. Keep durable,
+project-level behavior here and keep detailed, path-scoped rules in
+`.agents/rules/`.
+
+## Source Of Truth
+
+- Edit canonical rules in `.agents/rules/*.md`.
+- Edit canonical subagents in `.agents/agents/*.md`.
+- Edit tool-specific overlays in `.agents/adapters/<tool>/...` when an
+  instruction applies only to Cursor, Claude Code, or Codex.
+- Edit shared hooks in `.agents/hooks/*`.
+- Run `bin/sync-agent-config` after changing `.agents/**` to refresh adapters.
+- Do not hand-edit generated adapters under `.cursor/`, `.claude/`, or `.codex/`.
+
+## Project Stack
+
+<!-- TODO: describe the project stack -->
+- Language / framework:
+- Test suite:
+- Database:
+- Background jobs:
+- Key libraries:
+
+## Commands
+
+<!-- TODO: list the essential commands -->
+- Run tests:
+- Run linter:
+- Run CI checks: `bin/ci`
+- Regenerate agent adapters: `bin/sync-agent-config`
+- Check adapter drift: `bin/sync-agent-config --check`
+
+## Mandatory Workflow
+
+<!-- TODO: adapt to the project's real workflow -->
+- Read the matching file in `.agents/rules/` before editing a covered area.
+- Add or update tests for every new feature, service, or significant change.
+- Run the focused tests for the changed area before considering work complete.
+- Do not call external services in specs/tests; stub external integrations.
+- Comments, log messages, and commit messages must be in English.
+- Do not hardcode secrets or log sensitive values.
+
+## Rule Index
+
+<!-- TODO: keep in sync with the rules created under .agents/rules/ -->
+- Global conventions: `.agents/rules/core.md`
+- Git workflow: `.agents/rules/git-workflow.md`
+
+## Specialized Agents
+
+<!-- TODO: describe the available subagents -->
+<!-- Example:
+- `code-reviewer`: read-only review after meaningful changes.
+- `test-runner`: test execution, diagnosis, and fixes.
+-->

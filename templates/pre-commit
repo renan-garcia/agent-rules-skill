@@ -1,0 +1,25 @@
+#!/bin/bash
+# Git pre-commit hook: block commit if .cursor/, .claude/, .codex/ are out of
+# sync with .agents/. Run bin/sync-agent-config to fix.
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+sync_script="$repo_root/bin/sync-agent-config"
+
+[ -x "$sync_script" ] || exit 0
+
+# Only check if any .agents/** file is staged
+if ! git diff --cached --name-only | grep -q "^\.agents/"; then
+  exit 0
+fi
+
+"$sync_script" --check
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo ""
+  echo "  Agent config out of sync. Run: bin/sync-agent-config"
+  echo ""
+  exit 1
+fi
+
+exit 0

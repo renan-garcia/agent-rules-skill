@@ -1,0 +1,75 @@
+#!/bin/bash
+# Agent hook: run linter/formatter on files edited by an AI tool.
+# Supports Cursor (afterFileEdit), Claude Code (PostToolUse), and Codex (PostToolUse).
+#
+# Customize: replace the LINT_CMD below with your project's linter/formatter.
+# Examples:
+#   bundle exec rubocop --autocorrect --force-exclusion   (Ruby)
+#   npx eslint --fix                                       (JS/TS)
+#   black                                                  (Python)
+#   gofmt -w                                               (Go)
+#
+# Fails open: unexpected errors exit 0 so editing is never blocked.
+
+set -u
+
+# ── Configuration ───────────────────────────────────────────────────────
+# TODO: replace with your project's linter/formatter command
+LINT_CMD="echo 'configure LINT_CMD in .agents/hooks/linter-autocorrect.sh'"
+
+# File extensions to process (separated by |, without the dot)
+# Examples: "rb" "ts|tsx|js|jsx" "py" "go"
+FILE_EXTENSIONS="rb"
+# ────────────────────────────────────────────────────────────────────────
+
+input=$(cat)
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+command -v jq >/dev/null 2>&1 || exit 0
+
+file_paths=$(
+  printf '%s' "$input" | jq -r '
+    [
+      .file_path?,
+      .path?,
+      .filePath?,
+      .tool_input.file_path?,
+      .tool_input.path?,
+      .tool_input.filePath?,
+      .tool_input.edits[]?.file_path?,
+      .tool_input.edits[]?.path?,
+      .params.file_path?,
+      .params.path?,
+      .arguments.file_path?,
+      .arguments.path?
+    ]
+    | map(select(type == "string" and length > 0))
+    | unique
+    | .[]
+  ' 2>/dev/null
+) || exit 0
+
+target_files=()
+
+while IFS= read -r file_path; do
+  [ -n "$file_path" ] || continue
+
+  case "$file_path" in
+    /*) absolute_path="$file_path" ;;
+    *)  absolute_path="$repo_root/$file_path" ;;
+  esac
+
+  # Filter by extension
+  if ! echo "$absolute_path" | grep -qE "\.(${FILE_EXTENSIONS})$"; then
+    continue
+  fi
+
+  [ -f "$absolute_path" ] || continue
+  target_files+=("$absolute_path")
+done <<< "$file_paths"
+
+[ "${#target_files[@]}" -gt 0 ] || exit 0
+
+$LINT_CMD "${target_files[@]}" >/dev/null 2>&1 || true
+
+exit 0

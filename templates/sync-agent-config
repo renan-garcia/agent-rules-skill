@@ -1,0 +1,448 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# sync-agent-config
+#
+# Generates platform adapters (.cursor/, .claude/, .codex/) from the canonical
+# source in .agents/.
+#
+# Usage:
+#   bin/sync-agent-config                          # all platforms
+#   bin/sync-agent-config --platforms cursor       # Cursor only
+#   bin/sync-agent-config --platforms cursor,claude
+#   bin/sync-agent-config --check                  # verify drift without writing
+#
+# Supported platforms: cursor, claude, codex, opencode
+#
+# Alternative environment variable:
+#   AGENT_PLATFORMS=cursor,claude bin/sync-agent-config
+#
+# Optional project configuration file:
+#   .agents/config.json  →  { "platforms": ["cursor", "claude", "codex", "opencode"] }
+
+require "fileutils"
+require "json"
+require "yaml"
+
+ROOT    = File.expand_path("..", __dir__)
+CHECK   = ARGV.include?("--check")
+CHANGED = []
+
+# ── Platform resolution ───────────────────────────────────────────────────────
+
+ALL_PLATFORMS = %w[cursor claude codex opencode].freeze
+
+def resolve_platforms
+  # 1. --platforms command-line flag
+  if (flag = ARGV.find { |a| a.start_with?("--platforms=") })
+    return flag.sub("--platforms=", "").split(",").map(&:strip).map(&:downcase) & ALL_PLATFORMS
+  end
+
+  idx = ARGV.index("--platforms")
+  if idx && ARGV[idx + 1] && !ARGV[idx + 1].start_with?("--")
+    return ARGV[idx + 1].split(",").map(&:strip).map(&:downcase) & ALL_PLATFORMS
+  end
+
+  # 2. Environment variable
+  if (env = ENV["AGENT_PLATFORMS"])
+    return env.split(",").map(&:strip).map(&:downcase) & ALL_PLATFORMS
+  end
+
+  # 3. Project .agents/config.json file
+  config_file = File.join(ROOT, ".agents", "config.json")
+  if File.exist?(config_file)
+    config = JSON.parse(File.read(config_file)) rescue {}
+    if (platforms = config["platforms"])
+      return Array(platforms).map(&:to_s).map(&:downcase) & ALL_PLATFORMS
+    end
+  end
+
+  # 4. Global installer config (~/.config/agent-rules-skill/config.json)
+  global_config = File.expand_path("~/.config/agent-rules-skill/config.json")
+  if File.exist?(global_config)
+    config = JSON.parse(File.read(global_config)) rescue {}
+    if (platforms = config["platforms"])
+      return Array(platforms).map(&:to_s).map(&:downcase) & ALL_PLATFORMS
+    end
+  end
+
+  # 5. Default: all
+  ALL_PLATFORMS.dup
+end
+
+PLATFORMS = resolve_platforms.freeze
+
+if PLATFORMS.empty?
+  warn "No valid platform resolved (expected: #{ALL_PLATFORMS.join(", ")})."
+  exit 1
+end
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+
+def read_markdown(path)
+  content = File.read(path)
+  match   = content.match(/\A---\n(.*?)\n---\n/m)
+  return [{}, content] unless match
+
+  metadata = YAML.safe_load(match[1], permitted_classes: [], aliases: false) || {}
+  [metadata, content[match[0].length..]]
+end
+
+def metadata_list(value)
+  case value
+  when Array then value.map(&:to_s)
+  when nil   then []
+  else            value.to_s.split(",").map(&:strip)
+  end.reject(&:empty?)
+end
+
+def yaml_frontmatter(metadata)
+  "#{YAML.dump(metadata).sub(/\A---\n/, "---\n").sub(/\n\.\.\.\n\z/, "\n")}---\n\n"
+end
+
+def write_file(path, content, mode: nil)
+  if CHECK
+    CHANGED << path unless File.exist?(path) && File.read(path) == content
+    return
+  end
+
+  FileUtils.mkdir_p(File.dirname(path))
+  File.write(path, content)
+  FileUtils.chmod(mode, path) if mode
+end
+
+def json_file(data)
+  "#{JSON.pretty_generate(data)}\n"
+end
+
+def toml_string(value)
+  value.to_s.gsub("\\", "\\\\\\").gsub("\"", "\\\"")
+end
+
+def toml_multiline(value)
+  value.to_s.strip.gsub("'''", "'''\"'\"'''")
+end
+
+def adapter_append(adapter, kind, basename)
+  path = File.join(ROOT, ".agents", "adapters", adapter, kind, "#{basename}.md")
+  return "" unless File.exist?(path)
+
+  "\n\n#{File.read(path).strip}\n"
+end
+
+def with_adapter_append(body, adapter, kind, basename)
+  append = adapter_append(adapter, kind, basename)
+  return body if append.empty?
+
+  "#{body.rstrip}#{append}"
+end
+
+# ── Rules synchronization ─────────────────────────────────────────────────────
+
+rules_dir  = File.join(ROOT, ".agents", "rules")
+agents_dir = File.join(ROOT, ".agents", "agents")
+
+Dir[File.join(rules_dir, "*.md")].sort.each do |source|
+  basename = File.basename(source, ".md")
+  metadata, body = read_markdown(source)
+  globs = metadata_list(metadata["globs"])
+
+  if PLATFORMS.include?("cursor")
+    cursor_metadata = { "description" => metadata["description"] }.compact
+    cursor_metadata["globs"]       = globs.join(",") unless globs.empty?
+    cursor_metadata["alwaysApply"] = !!metadata["alwaysApply"]
+
+    write_file(
+      File.join(ROOT, ".cursor", "rules", "#{basename}.mdc"),
+      "#{yaml_frontmatter(cursor_metadata)}#{with_adapter_append(body.lstrip, "cursor", "rules", basename)}"
+    )
+  end
+
+  if PLATFORMS.include?("claude")
+    claude_metadata = { "description" => metadata["description"] }.compact
+    claude_metadata["paths"] = globs unless globs.empty? || metadata["alwaysApply"]
+
+    write_file(
+      File.join(ROOT, ".claude", "rules", "#{basename}.md"),
+      "#{yaml_frontmatter(claude_metadata)}#{with_adapter_append(body.lstrip, "claude", "rules", basename)}"
+    )
+  end
+
+  if PLATFORMS.include?("opencode")
+    # opencode has no per-glob activation: rules are surfaced as plain instruction
+    # files referenced from opencode.json (see the opencode.json block below).
+    write_file(
+      File.join(ROOT, ".opencode", "rules", "#{basename}.md"),
+      with_adapter_append(body.lstrip, "opencode", "rules", basename)
+    )
+  end
+end
+
+# ── Agents synchronization ────────────────────────────────────────────────────
+
+Dir[File.join(agents_dir, "*.md")].sort.each do |source|
+  basename = File.basename(source, ".md")
+  metadata, body = read_markdown(source)
+  readonly = metadata["readonly"] == true
+
+  if PLATFORMS.include?("cursor")
+    cursor_content = "#{yaml_frontmatter(metadata.dup)}#{with_adapter_append(body.lstrip, "cursor", "agents", basename)}"
+    write_file(File.join(ROOT, ".cursor", "agents", "#{basename}.md"), cursor_content)
+  end
+
+  if PLATFORMS.include?("claude")
+    claude_metadata = {
+      "name"        => metadata["name"],
+      "description" => metadata["description"],
+      "model"       => readonly ? "sonnet" : "inherit"
+    }.compact
+    if readonly
+      claude_metadata["tools"]          = "Read, Grep, Glob, Bash"
+      claude_metadata["disallowedTools"] = "Write, Edit, MultiEdit"
+    end
+    write_file(
+      File.join(ROOT, ".claude", "agents", "#{basename}.md"),
+      "#{yaml_frontmatter(claude_metadata)}#{with_adapter_append(body.lstrip, "claude", "agents", basename)}"
+    )
+  end
+
+  if PLATFORMS.include?("codex")
+    codex_body  = with_adapter_append(body.lstrip, "codex", "agents", basename)
+    codex_lines = []
+    codex_lines << %(name = "#{toml_string(metadata["name"])}")
+    codex_lines << %(description = "#{toml_string(metadata["description"])}")
+    codex_lines << %(sandbox_mode = "read-only") if readonly
+    codex_lines << %(model_reasoning_effort = "#{readonly ? "high" : "medium"}")
+    codex_lines << ""
+    codex_lines << "developer_instructions = '''"
+    codex_lines << toml_multiline(codex_body)
+    codex_lines << "'''"
+
+    write_file(File.join(ROOT, ".codex", "agents", "#{basename}.toml"), "#{codex_lines.join("\n")}\n")
+  end
+
+  if PLATFORMS.include?("opencode")
+    opencode_metadata = { "description" => metadata["description"], "mode" => "subagent" }.compact
+    opencode_metadata["model"] = metadata["model"] if metadata["model"]
+    opencode_metadata["tools"] = { "write" => false, "edit" => false } if readonly
+
+    write_file(
+      File.join(ROOT, ".opencode", "agents", "#{basename}.md"),
+      "#{yaml_frontmatter(opencode_metadata)}#{with_adapter_append(body.lstrip, "opencode", "agents", basename)}"
+    )
+  end
+end
+
+# ── Hooks ─────────────────────────────────────────────────────────────────────
+
+hooks_dir    = File.join(ROOT, ".agents", "hooks")
+hook_command = Dir["#{hooks_dir}/*.sh"].reject { |f| File.basename(f) == "sync-on-edit.sh" }.first
+sync_hook    = File.join(hooks_dir, "sync-on-edit.sh")
+
+relative_sync_hook   = File.exist?(sync_hook) ? sync_hook.sub("#{ROOT}/", "") : nil
+relative_linter_hook = hook_command ? hook_command.sub("#{ROOT}/", "") : nil
+
+if PLATFORMS.include?("cursor")
+  after_file_edit = []
+
+  # sync-on-edit: auto-run bin/sync-agent-config when .agents/** is edited
+  if relative_sync_hook
+    after_file_edit << {
+      "command" => relative_sync_hook,
+      "timeout" => 30
+    }
+  end
+
+  # linter hook (if present)
+  if relative_linter_hook
+    after_file_edit << {
+      "command" => relative_linter_hook,
+      "timeout" => 60
+    }
+  end
+
+  unless after_file_edit.empty?
+    write_file(
+      File.join(ROOT, ".cursor", "hooks.json"),
+      json_file("version" => 1, "hooks" => { "afterFileEdit" => after_file_edit })
+    )
+  end
+end
+
+if PLATFORMS.include?("claude") && (relative_sync_hook || relative_linter_hook)
+  claude_hooks = []
+
+  if relative_sync_hook
+    claude_hooks << {
+      "matcher" => "Write|Edit|MultiEdit",
+      "hooks"   => [{ "type" => "command", "command" => "${CLAUDE_PROJECT_DIR}/#{relative_sync_hook}", "args" => [], "timeout" => 30 }]
+    }
+  end
+
+  if relative_linter_hook
+    claude_hooks << {
+      "matcher" => "Write|Edit|MultiEdit",
+      "hooks"   => [{ "type" => "command", "command" => "${CLAUDE_PROJECT_DIR}/#{relative_linter_hook}", "args" => [], "timeout" => 60 }]
+    }
+  end
+
+  write_file(
+    File.join(ROOT, ".claude", "settings.json"),
+    json_file("$schema" => "https://json.schemastore.org/claude-code-settings.json", "hooks" => { "PostToolUse" => claude_hooks })
+  )
+end
+
+if PLATFORMS.include?("codex") && (relative_sync_hook || relative_linter_hook)
+  codex_hooks = []
+
+  if relative_sync_hook
+    codex_hooks << {
+      "matcher" => "Edit|Write|apply_patch",
+      "hooks"   => [{ "type" => "command", "command" => "\"$(git rev-parse --show-toplevel)/#{relative_sync_hook}\"", "timeout" => 30, "statusMessage" => "Syncing agent config" }]
+    }
+  end
+
+  if relative_linter_hook
+    codex_hooks << {
+      "matcher" => "Edit|Write|apply_patch",
+      "hooks"   => [{ "type" => "command", "command" => "\"$(git rev-parse --show-toplevel)/#{relative_linter_hook}\"", "timeout" => 60, "statusMessage" => "Running linter autocorrect" }]
+    }
+  end
+
+  write_file(
+    File.join(ROOT, ".codex", "hooks.json"),
+    json_file("hooks" => { "PostToolUse" => codex_hooks })
+  )
+end
+
+# ── Worktrees ─────────────────────────────────────────────────────────────────
+
+worktrees_src = File.join(ROOT, ".agents", "worktrees.json")
+if File.exist?(worktrees_src) && PLATFORMS.include?("cursor")
+  write_file(
+    File.join(ROOT, ".cursor", "worktrees.json"),
+    File.read(worktrees_src)
+  )
+end
+
+# ── opencode.json ─────────────────────────────────────────────────────────────
+#
+# opencode reads AGENTS.md natively, but scoped rules are surfaced by pointing its
+# `instructions` field at the generated .opencode/rules/ files. opencode.json may
+# also hold user config (providers, models, plugins), so we MERGE: only the rules
+# glob entry is managed; every other key is preserved.
+
+if PLATFORMS.include?("opencode") && !Dir[File.join(rules_dir, "*.md")].empty?
+  opencode_config_path = File.join(ROOT, "opencode.json")
+  opencode_config = File.exist?(opencode_config_path) ? (JSON.parse(File.read(opencode_config_path)) rescue {}) : {}
+  opencode_config["$schema"] ||= "https://opencode.ai/config.json"
+
+  rules_glob   = ".opencode/rules/*.md"
+  instructions = Array(opencode_config["instructions"])
+  instructions << rules_glob unless instructions.include?(rules_glob)
+  opencode_config["instructions"] = instructions
+
+  write_file(opencode_config_path, json_file(opencode_config))
+end
+
+# ── AGENTS.md ─────────────────────────────────────────────────────────────────
+#
+# Portable, editable project entrypoint. Unlike the adapters, this is the SOURCE:
+# created once from the default template when missing and never overwritten
+# afterwards. It does not count as drift in --check mode.
+
+agents_md = File.join(ROOT, "AGENTS.md")
+if !CHECK && !File.exist?(agents_md)
+  File.write(agents_md, <<~MD)
+    # AGENTS.md
+
+    This is the portable project entrypoint for AI coding agents. Keep durable,
+    project-level behavior here and keep detailed, path-scoped rules in
+    `.agents/rules/`.
+
+    ## Source Of Truth
+
+    - Edit canonical rules in `.agents/rules/*.md`.
+    - Edit canonical subagents in `.agents/agents/*.md`.
+    - Edit tool-specific overlays in `.agents/adapters/<tool>/...` when an
+      instruction applies only to Cursor, Claude Code, or Codex.
+    - Edit shared hooks in `.agents/hooks/*`.
+    - Run `bin/sync-agent-config` after changing `.agents/**` to refresh adapters.
+    - Do not hand-edit generated adapters under `.cursor/`, `.claude/`, or `.codex/`.
+
+    ## Project Stack
+
+    <!-- TODO: describe the project stack -->
+    - Language / framework:
+    - Test suite:
+    - Database:
+    - Background jobs:
+    - Key libraries:
+
+    ## Commands
+
+    <!-- TODO: list the essential commands -->
+    - Run tests:
+    - Run linter:
+    - Run CI checks: `bin/ci`
+    - Regenerate agent adapters: `bin/sync-agent-config`
+    - Check adapter drift: `bin/sync-agent-config --check`
+
+    ## Mandatory Workflow
+
+    <!-- TODO: adapt to the project's real workflow -->
+    - Read the matching file in `.agents/rules/` before editing a covered area.
+    - Add or update tests for every new feature, service, or significant change.
+    - Run the focused tests for the changed area before considering work complete.
+    - Do not call external services in specs/tests; stub external integrations.
+    - Comments, log messages, and commit messages must be in English.
+    - Do not hardcode secrets or log sensitive values.
+
+    ## Rule Index
+
+    <!-- TODO: keep in sync with the rules created under .agents/rules/ -->
+
+    ## Specialized Agents
+
+    <!-- TODO: describe the available subagents -->
+  MD
+
+  puts "AGENTS.md was missing — created from the default template. Fill in the TODOs with the project's information."
+end
+
+# ── CLAUDE.md ─────────────────────────────────────────────────────────────────
+
+if PLATFORMS.include?("claude")
+  write_file(
+    File.join(ROOT, "CLAUDE.md"),
+    <<~MD
+      @AGENTS.md
+
+      ## Claude Code
+
+      - Tool-specific project rules are generated in `.claude/rules/` from `.agents/rules/`.
+      - Project subagents are generated in `.claude/agents/` from `.agents/agents/`.
+      - Project hooks are configured in `.claude/settings.json` and call scripts from `.agents/hooks/`.
+    MD
+  )
+end
+
+# ── Hook permissions ──────────────────────────────────────────────────────────
+
+unless CHECK
+  Dir["#{hooks_dir}/*.sh"].each { |f| FileUtils.chmod(0o755, f) }
+end
+
+# ── Result ────────────────────────────────────────────────────────────────────
+
+if CHECK
+  if CHANGED.empty?
+    puts "Agent configuration is in sync. [platforms: #{PLATFORMS.join(", ")}]"
+  else
+    puts "Agent configuration is out of sync: [platforms: #{PLATFORMS.join(", ")}]"
+    CHANGED.each { |path| puts "  #{path.sub("#{ROOT}/", "")}" }
+    exit 1
+  end
+else
+  puts "Agent configuration synchronized. [platforms: #{PLATFORMS.join(", ")}]"
+end

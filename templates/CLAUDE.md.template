@@ -1,0 +1,7 @@
+@AGENTS.md
+
+## Claude Code
+
+- Tool-specific project rules are generated in `.claude/rules/` from `.agents/rules/`.
+- Project subagents are generated in `.claude/agents/` from `.agents/agents/`.
+- Project hooks are configured in `.claude/settings.json` and call scripts from `.agents/hooks/`.

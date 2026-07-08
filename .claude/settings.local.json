@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/renan/Desktop/teste/**)",
+      "Bash(ls -la .git/hooks/pre-commit)",
+      "Bash(rake test *)",
+      "WebFetch(domain:cursor.com)"
+    ]
+  }
+}
