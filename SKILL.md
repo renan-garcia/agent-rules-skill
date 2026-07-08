@@ -28,6 +28,30 @@ Bootstrap and migration of vendor-neutral AI agent configuration for any project
 
 ---
 
+## Scope constraint — migrate only, never invent
+
+**This skill migrates and restructures configuration that already exists. It must
+NOT generate, infer, or fetch new rule content.** In particular:
+
+- Do **not** author rules the source config did not already contain.
+- Do **not** fetch or embed third-party library/framework documentation (e.g.
+  pulling TanStack Router, React, or any library docs from the web, `context7`,
+  `node_modules`, or training memory) as project rules.
+- Do **not** expand a short source file into extra rules beyond the themes that
+  are literally present in it.
+- When the source is empty or missing (Case A), **ask the user** for the content
+  instead of inventing conventions.
+
+The only transformation allowed is **reorganizing existing content** across the
+canonical format and adapters. If you think a rule is missing, surface it as a
+suggestion to the user — do not write it yourself.
+
+The output rule set must be traceable 1:1 to the source: every `.agents/rules/*.md`
+must correspond to content that existed in the input. If it cannot be traced to
+the source, it does not belong.
+
+---
+
 ## Step 1 — Inventory the project
 
 Before creating any file, read what already exists:
@@ -72,6 +96,10 @@ Read the entire file and split by theme/area into separate rules:
 - Each group becomes a `.agents/rules/<theme>.md` with a `globs:` frontmatter
 - Global rules without a scope → `.agents/rules/core.md` with `alwaysApply: true`
 - Keep the original file until the sync is confirmed to be working
+
+**Split only — do not add.** Every resulting rule must be a slice of the original
+`.cursorrules` text. Do not enrich the split with library documentation, examples,
+or best-practices the file did not contain (see "Scope constraint" above).
 
 ### Case C: Existing `.cursor/rules/*.mdc`
 
