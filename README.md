@@ -105,6 +105,25 @@ bin/sync-agent-config --platforms cursor,claude
 bin/sync-agent-config --check
 ```
 
+### Updating a project's executables
+
+After upgrading the skill, refresh the executables a project copied from it
+(`bin/sync-agent-config` and `.agents/hooks/sync-on-edit.sh`) with:
+
+```bash
+etc/agent-rules-skill/update.sh                            # interactive wizard (like install.sh)
+etc/agent-rules-skill/update.sh /path/to/project           # runtime from installer config
+etc/agent-rules-skill/update.sh /path/to/project --runtime bun
+```
+
+Run without arguments on a terminal to get a step-by-step wizard (project path,
+runtime, review, confirm). Non-interactive runs without a path default to the
+current directory.
+
+Project sources (`AGENTS.md`, `.agents/**`, `bin/sync-agent-config-options.json`)
+are never touched. The update is idempotent and reports each file as updated or
+already up to date.
+
 ### Platform resolution order (first match wins)
 
 1. `--platforms` CLI flag
@@ -119,6 +138,7 @@ bin/sync-agent-config --check
 agent-rules-skill/
 ├── SKILL.md                        ← Cursor agent skill (bootstrap + migration logic)
 ├── install.sh                      ← interactive installer (self-contained gum)
+├── update.sh                       ← refresh a project's copied executables
 ├── README.md                       ← this file
 ├── templates/
 │   ├── sync-agent-config           ← sync script, Ruby reference (copy to bin/)

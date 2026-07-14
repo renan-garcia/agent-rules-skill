@@ -304,7 +304,7 @@ fi
 # ── 5. Install skill ──────────────────────────────────────────────────────────
 # Only the real skill assets are shipped — never the whole folder (which could
 # include dev/test dirs and, if the target is nested, copy itself recursively).
-SKILL_ASSETS=(SKILL.md README.md install.sh templates examples)
+SKILL_ASSETS=(SKILL.md README.md install.sh update.sh templates examples)
 
 section "🚀 Installing"
 

@@ -292,6 +292,11 @@ The destination is always `bin/sync-agent-config`; the copied file's shebang
 selects the interpreter. All ports accept `--platforms` / `--check` and read the
 same installer preferences automatically.
 
+To refresh the executables of an already-bootstrapped project after the skill
+is upgraded, run `<package>/update.sh <project-path>` — it re-copies
+`bin/sync-agent-config` (honoring the configured runtime) and
+`.agents/hooks/sync-on-edit.sh` without touching any project source.
+
 When an adapter's canonical source is deleted, the next sync offers to remove
 each stale generated file with a `y/n/a/i/q` prompt (`y` remove, `n` keep,
 `a` remove all remaining, `i` ignore this file forever, `q` keep all
