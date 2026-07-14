@@ -14,6 +14,11 @@
 #
 # Supported platforms: cursor, claude, codex, opencode
 #
+# Adapters whose canonical source was removed are pruned after a per-file
+# y/n/a/i/q confirmation (i persists the file in bin/sync-agent-config-options.json
+# and never asks again; EOF keeps files, so hooks/CI never delete silently);
+# --check lists them as drift instead.
+#
 # Alternative environment variable:
 #   AGENT_PLATFORMS=cursor,claude bin/sync-agent-config
 #
@@ -433,14 +438,124 @@ unless CHECK
   Dir["#{hooks_dir}/*.sh"].each { |f| FileUtils.chmod(0o755, f) }
 end
 
+# ── Stale adapter pruning ─────────────────────────────────────────────────────
+#
+# Files inside the managed adapter directories whose canonical source no longer
+# exists are offered for removal one by one: y = remove, n = keep, a = remove
+# this and all remaining, i = ignore this file forever (persisted in
+# bin/sync-agent-config-options.json), q = keep this and all remaining. On a
+# TTY a single keypress answers (no Enter needed, case-insensitive); invalid
+# keys re-prompt. EOF answers q, so non-interactive runs (hooks, CI) never
+# delete anything. --check lists stale files as drift instead of prompting.
+
+OPTIONS_FILE = File.join(ROOT, "bin", "sync-agent-config-options.json")
+
+# Namespaced by feature so future options can live alongside prune's.
+def load_options
+  return {} unless File.exist?(OPTIONS_FILE)
+
+  JSON.parse(File.read(OPTIONS_FILE)) rescue {}
+end
+
+def save_options(options)
+  FileUtils.mkdir_p(File.dirname(OPTIONS_FILE))
+  File.write(OPTIONS_FILE, json_file(options))
+end
+
+# One answer from the user. On a TTY, reads a single raw keypress (echoed back
+# with a newline so the transcript stays clean); otherwise reads a line, so
+# piped stdin still works. EOF and Ctrl-C/Ctrl-D answer q (the safe default).
+def read_answer
+  unless $stdin.tty?
+    line = $stdin.gets
+    return line ? line.strip.downcase : "q"
+  end
+
+  require "io/console"
+  char = $stdin.getch
+  char = "q" if char.nil? || char == "\u0003" || char == "\u0004"
+  answer = char.strip.downcase
+  puts(answer =~ /\A[a-z]\z/ ? answer : "")
+  answer
+end
+
+rule_names  = Dir[File.join(rules_dir, "*.md")].map  { |f| File.basename(f, ".md") }
+agent_names = Dir[File.join(agents_dir, "*.md")].map { |f| File.basename(f, ".md") }
+
+managed_dirs = [
+  ["cursor",   %w[.cursor rules],    ".mdc",  rule_names],
+  ["cursor",   %w[.cursor agents],   ".md",   agent_names],
+  ["claude",   %w[.claude rules],    ".md",   rule_names],
+  ["claude",   %w[.claude agents],   ".md",   agent_names],
+  ["codex",    %w[.codex agents],    ".toml", agent_names],
+  ["opencode", %w[.opencode rules],  ".md",   rule_names],
+  ["opencode", %w[.opencode agents], ".md",   agent_names]
+]
+
+options = load_options
+prune_options = options["prune"].is_a?(Hash) ? options["prune"] : {}
+ignored = Array(prune_options["ignored"]).map(&:to_s)
+
+stale_files = managed_dirs.flat_map do |platform, dir, ext, names|
+  next [] unless PLATFORMS.include?(platform)
+
+  Dir[File.join(ROOT, *dir, "*#{ext}")].sort.reject do |f|
+    names.include?(File.basename(f, ext)) || ignored.include?(f.sub("#{ROOT}/", ""))
+  end
+end
+
+unless CHECK || stale_files.empty?
+  removed = 0
+  mode    = :ask
+
+  stale_files.each do |file|
+    rel = file.sub("#{ROOT}/", "")
+    answer =
+      case mode
+      when :all  then "y"
+      when :quit then "n"
+      else
+        response = nil
+        loop do
+          print "Remove stale #{rel}? [y/n/a/i/q] "
+          $stdout.flush
+          response = read_answer
+          break if %w[y n a i q].include?(response)
+        end
+        mode = :all  if response == "a"
+        mode = :quit if response == "q"
+        { "a" => "y", "q" => "n" }.fetch(response, response)
+      end
+
+    if answer == "i"
+      ignored << rel
+      prune_options["ignored"] = ignored.uniq
+      options["prune"] = prune_options
+      save_options(options)
+      puts "Ignored #{rel} — saved to bin/sync-agent-config-options.json."
+      next
+    end
+
+    next unless answer == "y"
+
+    File.delete(file)
+    removed += 1
+    dir = File.dirname(file)
+    Dir.rmdir(dir) if Dir.exist?(dir) && Dir.empty?(dir)
+  end
+
+  puts "Removed #{removed} stale adapter file(s)." if removed.positive?
+end
+
 # ── Result ────────────────────────────────────────────────────────────────────
 
 if CHECK
-  if CHANGED.empty?
+  if CHANGED.empty? && stale_files.empty?
     puts "Agent configuration is in sync. [platforms: #{PLATFORMS.join(", ")}]"
   else
     puts "Agent configuration is out of sync: [platforms: #{PLATFORMS.join(", ")}]"
     CHANGED.each { |path| puts "  #{path.sub("#{ROOT}/", "")}" }
+    stale_files.each { |path| puts "  #{path.sub("#{ROOT}/", "")} (stale — no canonical source)" }
     exit 1
   end
 else

@@ -13,6 +13,11 @@
  *
  * Supported platforms: cursor, claude, codex, opencode
  *
+ * Adapters whose canonical source was removed are pruned after a per-file
+ * y/n/a/i/q confirmation (i persists the file in bin/sync-agent-config-options.json
+ * and never asks again; EOF keeps files, so hooks/CI never delete silently);
+ * --check lists them as drift instead.
+ *
  * Alternative environment variable:
  *   AGENT_PLATFORMS=cursor,claude bin/sync-agent-config
  *
@@ -603,16 +608,189 @@ if (!CHECK) {
   for (const f of sortedGlob(hooksDir, ".sh")) fs.chmodSync(f, 0o755);
 }
 
+// ── Stale adapter pruning ────────────────────────────────────────────────────
+//
+// Files inside the managed adapter directories whose canonical source no longer
+// exists are offered for removal one by one: y = remove, n = keep, a = remove
+// this and all remaining, i = ignore this file forever (persisted in
+// bin/sync-agent-config-options.json), q = keep this and all remaining. On a
+// TTY a single keypress answers (no Enter needed, case-insensitive); invalid
+// keys re-prompt. EOF answers q, so non-interactive runs (hooks, CI) never
+// delete anything. --check lists stale files as drift instead of prompting.
+
+const OPTIONS_FILE = path.join(ROOT, "bin", "sync-agent-config-options.json");
+
+// Namespaced by feature so future options can live alongside prune's.
+function loadOptions() {
+  if (!fs.existsSync(OPTIONS_FILE)) return {};
+  try {
+    return JSON.parse(readFile(OPTIONS_FILE));
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveOptions(options) {
+  fs.mkdirSync(path.dirname(OPTIONS_FILE), { recursive: true });
+  fs.writeFileSync(OPTIONS_FILE, jsonFile(options));
+}
+
+let stdinBuffer = "";
+let stdinEof = false;
+
+// Blocking line read from fd 0; returns null at EOF. Keeps leftover bytes so
+// one read serving several prompts (piped stdin) is handled correctly.
+function readStdinLine() {
+  const chunk = Buffer.alloc(1024);
+  while (true) {
+    const nl = stdinBuffer.indexOf("\n");
+    if (nl !== -1) {
+      const line = stdinBuffer.slice(0, nl);
+      stdinBuffer = stdinBuffer.slice(nl + 1);
+      return line;
+    }
+    if (stdinEof) {
+      if (stdinBuffer.length) {
+        const line = stdinBuffer;
+        stdinBuffer = "";
+        return line;
+      }
+      return null;
+    }
+    let bytes = 0;
+    try {
+      bytes = fs.readSync(0, chunk, 0, chunk.length);
+    } catch (e) {
+      if (e.code === "EAGAIN") continue;
+      stdinEof = true;
+      continue;
+    }
+    if (bytes === 0) {
+      stdinEof = true;
+      continue;
+    }
+    stdinBuffer += chunk.toString("utf8", 0, bytes);
+  }
+}
+
+// One answer from the user. On a TTY, reads a single raw keypress (echoed back
+// with a newline so the transcript stays clean); otherwise reads a line, so
+// piped stdin still works. EOF and Ctrl-C/Ctrl-D answer q (the safe default).
+function readAnswer() {
+  if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
+    const line = readStdinLine();
+    return line === null ? "q" : line.trim().toLowerCase();
+  }
+
+  let char = null;
+  try {
+    process.stdin.setRawMode(true);
+    const chunk = Buffer.alloc(8);
+    const bytes = fs.readSync(0, chunk, 0, chunk.length);
+    if (bytes > 0) char = chunk.toString("utf8", 0, bytes);
+  } catch (e) {
+    char = null;
+  } finally {
+    try {
+      process.stdin.setRawMode(false);
+    } catch (e) {
+      // stdin already closed; nothing to restore
+    }
+  }
+  if (char === null || char === "\u0003" || char === "\u0004") char = "q";
+  const answer = char.trim().toLowerCase();
+  process.stdout.write(`${/^[a-z]$/.test(answer) ? answer : ""}\n`);
+  return answer;
+}
+
+const ruleNames = sortedGlob(rulesDir, ".md").map((f) => path.basename(f, ".md"));
+const agentNames = sortedGlob(agentsDir, ".md").map((f) => path.basename(f, ".md"));
+
+const managedDirs = [
+  ["cursor", [".cursor", "rules"], ".mdc", ruleNames],
+  ["cursor", [".cursor", "agents"], ".md", agentNames],
+  ["claude", [".claude", "rules"], ".md", ruleNames],
+  ["claude", [".claude", "agents"], ".md", agentNames],
+  ["codex", [".codex", "agents"], ".toml", agentNames],
+  ["opencode", [".opencode", "rules"], ".md", ruleNames],
+  ["opencode", [".opencode", "agents"], ".md", agentNames],
+];
+
+const options = loadOptions();
+const pruneOptions =
+  options.prune && typeof options.prune === "object" && !Array.isArray(options.prune)
+    ? options.prune
+    : {};
+const ignored = (Array.isArray(pruneOptions.ignored) ? pruneOptions.ignored : []).map(
+  (p) => String(p)
+);
+
+const staleFiles = [];
+for (const [platform, dir, ext, names] of managedDirs) {
+  if (!PLATFORMS.includes(platform)) continue;
+  for (const file of sortedGlob(path.join(ROOT, ...dir), ext)) {
+    if (names.includes(path.basename(file, ext))) continue;
+    if (ignored.includes(file.slice(ROOT.length + 1))) continue;
+    staleFiles.push(file);
+  }
+}
+
+if (!CHECK && staleFiles.length) {
+  let removed = 0;
+  let mode = "ask";
+
+  for (const file of staleFiles) {
+    const rel = file.slice(ROOT.length + 1);
+    let answer;
+    if (mode === "all") {
+      answer = "y";
+    } else if (mode === "quit") {
+      answer = "n";
+    } else {
+      let response;
+      while (true) {
+        process.stdout.write(`Remove stale ${rel}? [y/n/a/i/q] `);
+        response = readAnswer();
+        if (["y", "n", "a", "i", "q"].includes(response)) break;
+      }
+      if (response === "a") mode = "all";
+      if (response === "q") mode = "quit";
+      answer = response === "a" ? "y" : response === "q" ? "n" : response;
+    }
+
+    if (answer === "i") {
+      ignored.push(rel);
+      pruneOptions.ignored = Array.from(new Set(ignored));
+      options.prune = pruneOptions;
+      saveOptions(options);
+      console.log(`Ignored ${rel} — saved to bin/sync-agent-config-options.json.`);
+      continue;
+    }
+
+    if (answer !== "y") continue;
+
+    fs.unlinkSync(file);
+    removed += 1;
+    const dir = path.dirname(file);
+    if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+  }
+
+  if (removed > 0) console.log(`Removed ${removed} stale adapter file(s).`);
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 
 if (CHECK) {
-  if (CHANGED.length === 0) {
+  if (CHANGED.length === 0 && staleFiles.length === 0) {
     console.log(`Agent configuration is in sync. [platforms: ${PLATFORMS.join(", ")}]`);
   } else {
     console.log(
       `Agent configuration is out of sync: [platforms: ${PLATFORMS.join(", ")}]`
     );
     for (const p of CHANGED) console.log(`  ${p.slice(ROOT.length + 1)}`);
+    for (const p of staleFiles) {
+      console.log(`  ${p.slice(ROOT.length + 1)} (stale — no canonical source)`);
+    }
     process.exit(1);
   }
 } else {

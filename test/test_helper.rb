@@ -96,11 +96,11 @@ class SyncTestCase < Minitest::Test
 
   # ── Execution ──────────────────────────────────────────────────────────────
 
-  def run_sync(*args, env: {})
+  def run_sync(*args, env: {}, stdin: "")
     # Isolate the environment so the machine's global config / env vars never
     # leak into the platform resolution chain (keeps the suite hermetic).
     base = { "HOME" => File.join(@project, ".home"), "AGENT_PLATFORMS" => nil }
-    Open3.capture3(base.merge(env), runtime[:interpreter], "bin/sync-agent-config", *args, chdir: @project)
+    Open3.capture3(base.merge(env), runtime[:interpreter], "bin/sync-agent-config", *args, chdir: @project, stdin_data: stdin)
   end
 
   # ── Generated artifact readers ─────────────────────────────────────────────

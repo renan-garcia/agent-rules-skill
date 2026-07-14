@@ -12,6 +12,11 @@ Usage:
 
 Supported platforms: cursor, claude, codex, opencode
 
+Adapters whose canonical source was removed are pruned after a per-file
+y/n/a/i/q confirmation (i persists the file in bin/sync-agent-config-options.json
+and never asks again; EOF keeps files, so hooks/CI never delete silently);
+--check lists them as drift instead.
+
 Alternative environment variable:
   AGENT_PLATFORMS=cursor,claude bin/sync-agent-config
 
@@ -575,15 +580,156 @@ if not CHECK:
         os.chmod(f, 0o755)
 
 
+# ── Stale adapter pruning ─────────────────────────────────────────────────────
+#
+# Files inside the managed adapter directories whose canonical source no longer
+# exists are offered for removal one by one: y = remove, n = keep, a = remove
+# this and all remaining, i = ignore this file forever (persisted in
+# bin/sync-agent-config-options.json), q = keep this and all remaining. On a
+# TTY a single keypress answers (no Enter needed, case-insensitive); invalid
+# keys re-prompt. EOF answers q, so non-interactive runs (hooks, CI) never
+# delete anything. --check lists stale files as drift instead of prompting.
+
+OPTIONS_FILE = os.path.join(ROOT, "bin", "sync-agent-config-options.json")
+
+
+def load_options():
+    """Namespaced by feature so future options can live alongside prune's."""
+    if not os.path.exists(OPTIONS_FILE):
+        return {}
+    try:
+        return json.loads(_read(OPTIONS_FILE))
+    except Exception:
+        return {}
+
+
+def save_options(options):
+    os.makedirs(os.path.dirname(OPTIONS_FILE), exist_ok=True)
+    with open(OPTIONS_FILE, "w") as fh:
+        fh.write(json_file(options))
+
+
+def read_answer():
+    """One answer from the user. On a TTY, reads a single raw keypress (echoed
+    back with a newline so the transcript stays clean); otherwise reads a line,
+    so piped stdin still works. EOF and Ctrl-D answer q (the safe default)."""
+    if sys.stdin.isatty():
+        try:
+            import termios
+            import tty
+        except ImportError:
+            pass
+        else:
+            fd = sys.stdin.fileno()
+            old_attrs = termios.tcgetattr(fd)
+            try:
+                # TCSANOW: the default TCSAFLUSH would discard a key already
+                # typed between the prompt and the mode switch.
+                tty.setcbreak(fd, termios.TCSANOW)
+                char = sys.stdin.read(1)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+            if char == "" or char in ("\x03", "\x04"):
+                char = "q"
+            answer = char.strip().lower()
+            sys.stdout.write("%s\n" % (answer if re.fullmatch(r"[a-z]", answer) else ""))
+            sys.stdout.flush()
+            return answer
+    line = sys.stdin.readline()
+    return "q" if line == "" else line.strip().lower()
+
+
+rule_names = [
+    os.path.basename(f)[:-len(".md")]
+    for f in sorted_glob(os.path.join(rules_dir, "*.md"))
+]
+agent_names = [
+    os.path.basename(f)[:-len(".md")]
+    for f in sorted_glob(os.path.join(agents_dir, "*.md"))
+]
+
+managed_dirs = [
+    ("cursor",   (".cursor", "rules"),    ".mdc",  rule_names),
+    ("cursor",   (".cursor", "agents"),   ".md",   agent_names),
+    ("claude",   (".claude", "rules"),    ".md",   rule_names),
+    ("claude",   (".claude", "agents"),   ".md",   agent_names),
+    ("codex",    (".codex", "agents"),    ".toml", agent_names),
+    ("opencode", (".opencode", "rules"),  ".md",   rule_names),
+    ("opencode", (".opencode", "agents"), ".md",   agent_names),
+]
+
+options = load_options()
+prune_options = options.get("prune")
+if not isinstance(prune_options, dict):
+    prune_options = {}
+ignored = [str(p) for p in (prune_options.get("ignored") or [])]
+
+stale_files = []
+for platform, dir_parts, ext, names in managed_dirs:
+    if platform not in PLATFORMS:
+        continue
+    for f in sorted_glob(os.path.join(ROOT, *dir_parts) + "/*" + ext):
+        if os.path.basename(f)[:-len(ext)] in names:
+            continue
+        if f[len(ROOT) + 1:] in ignored:
+            continue
+        stale_files.append(f)
+
+if not CHECK and stale_files:
+    removed = 0
+    mode = "ask"
+
+    for stale in stale_files:
+        rel = stale[len(ROOT) + 1:]
+        if mode == "all":
+            answer = "y"
+        elif mode == "quit":
+            answer = "n"
+        else:
+            while True:
+                sys.stdout.write("Remove stale %s? [y/n/a/i/q] " % rel)
+                sys.stdout.flush()
+                response = read_answer()
+                if response in ("y", "n", "a", "i", "q"):
+                    break
+            if response == "a":
+                mode = "all"
+            if response == "q":
+                mode = "quit"
+            answer = {"a": "y", "q": "n"}.get(response, response)
+
+        if answer == "i":
+            ignored.append(rel)
+            prune_options["ignored"] = list(dict.fromkeys(ignored))
+            options["prune"] = prune_options
+            save_options(options)
+            print("Ignored %s — saved to bin/sync-agent-config-options.json." % rel)
+            continue
+
+        if answer != "y":
+            continue
+
+        os.remove(stale)
+        removed += 1
+        stale_dir = os.path.dirname(stale)
+        if os.path.isdir(stale_dir) and not os.listdir(stale_dir):
+            os.rmdir(stale_dir)
+
+    if removed > 0:
+        print("Removed %d stale adapter file(s)." % removed)
+
+
 # ── Result ────────────────────────────────────────────────────────────────────
 
 if CHECK:
-    if not CHANGED:
+    if not CHANGED and not stale_files:
         print("Agent configuration is in sync. [platforms: %s]" % ", ".join(PLATFORMS))
     else:
         print("Agent configuration is out of sync: [platforms: %s]" % ", ".join(PLATFORMS))
         for path in CHANGED:
             print("  %s" % path[len(ROOT) + 1:])
+        for path in stale_files:
+            print("  %s (stale — no canonical source)" % path[len(ROOT) + 1:])
         sys.exit(1)
 else:
     print("Agent configuration synchronized. [platforms: %s]" % ", ".join(PLATFORMS))

@@ -292,6 +292,17 @@ The destination is always `bin/sync-agent-config`; the copied file's shebang
 selects the interpreter. All ports accept `--platforms` / `--check` and read the
 same installer preferences automatically.
 
+When an adapter's canonical source is deleted, the next sync offers to remove
+each stale generated file with a `y/n/a/i/q` prompt (`y` remove, `n` keep,
+`a` remove all remaining, `i` ignore this file forever, `q` keep all
+remaining). On a TTY a single keypress answers — no Enter needed,
+case-insensitive; invalid keys re-prompt. Ignored files are persisted in
+`bin/sync-agent-config-options.json` under the `prune.ignored` namespace (the
+file is namespaced by feature so future options can live alongside) and are
+skipped by both the prompt and `--check`. Non-interactive runs (hooks, CI) read
+EOF as `q`, so nothing is ever deleted silently; `--check` lists stale files as
+drift instead.
+
 ### Auto-sync hook (all platforms)
 
 Copy the hook that detects edits to `.agents/**` and triggers sync automatically:
