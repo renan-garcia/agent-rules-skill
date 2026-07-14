@@ -15,7 +15,8 @@ namespace :test do
   {
     "ruby"   => "ruby",
     "python" => "python3",
-    "node"   => "node"
+    "node"   => "node",
+    "bun"    => "bun"
   }.each do |runtime, interpreter|
     desc "Run the suite against the #{runtime} port"
     task runtime do
@@ -33,8 +34,8 @@ namespace :test do
     end
   end
 
-  desc "Run the suite against every available port (ruby, python, node)"
-  task parity: %w[ruby python node]
+  desc "Run the suite against every available port (ruby, python, node, bun)"
+  task parity: %w[ruby python node bun]
 end
 
 task default: :test

@@ -16,11 +16,14 @@ class SyncTestCase < Minitest::Test
   SYNC_ON_EDIT = File.join(SKILL_ROOT, "templates", "sync-on-edit.sh")
 
   # The suite runs against each language port so they stay in behavioural
-  # parity. Select one with SYNC_RUNTIME=ruby|python|node (default: ruby).
+  # parity. Select one with SYNC_RUNTIME=ruby|python|node|bun (default: ruby).
+  # Bun runs the Node port; the installer rewrites the shebang to bun, mirrored
+  # here in setup.
   RUNTIMES = {
     "ruby"   => { interpreter: "ruby",    template: "sync-agent-config" },
     "python" => { interpreter: "python3", template: "sync-agent-config.py" },
-    "node"   => { interpreter: "node",    template: "sync-agent-config.js" }
+    "node"   => { interpreter: "node",    template: "sync-agent-config.js" },
+    "bun"    => { interpreter: "bun",     template: "sync-agent-config.js", shebang: "#!/usr/bin/env bun" }
   }.freeze
 
   def runtime
@@ -34,8 +37,14 @@ class SyncTestCase < Minitest::Test
     FileUtils.mkdir_p(File.join(@project, ".agents", "agents"))
     FileUtils.mkdir_p(File.join(@project, ".agents", "hooks"))
     source = File.join(SKILL_ROOT, "templates", runtime[:template])
-    FileUtils.cp(source, File.join(@project, "bin", "sync-agent-config"))
-    FileUtils.chmod(0o755, File.join(@project, "bin", "sync-agent-config"))
+    target = File.join(@project, "bin", "sync-agent-config")
+    FileUtils.cp(source, target)
+    if runtime[:shebang]
+      lines = File.readlines(target)
+      lines[0] = "#{runtime[:shebang]}\n"
+      File.write(target, lines.join)
+    end
+    FileUtils.chmod(0o755, target)
 
     # The suite overrides HOME to isolate the global installer config from
     # platform resolution. On machines that manage interpreters with a

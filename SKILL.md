@@ -267,19 +267,24 @@ Fill in the TODO sections with real project information:
 
 `bin/sync-agent-config` ships in three behaviourally identical ports: the Ruby
 reference (`sync-agent-config`), a Node port (`sync-agent-config.js`), and a
-Python 3 port (`sync-agent-config.py`). Copy the one matching the `runtime`
-saved by the installer in `~/.config/agent-rules-skill/config.json` (falls back
-to the Ruby reference when unset):
+Python 3 port (`sync-agent-config.py`). The `bun` runtime reuses the Node port,
+with the shebang pointed at `bun`. Copy the one matching the `runtime` saved by
+the installer in `~/.config/agent-rules-skill/config.json` (falls back to the
+Ruby reference when unset):
 
 ```bash
-# runtime → template: ruby=sync-agent-config, node=sync-agent-config.js, python=sync-agent-config.py
+# runtime → template: ruby=sync-agent-config, node|bun=sync-agent-config.js, python=sync-agent-config.py
 runtime="$(python3 -c 'import json,os,sys;print(json.load(open(os.path.expanduser("~/.config/agent-rules-skill/config.json"))).get("runtime","ruby"))' 2>/dev/null || echo ruby)"
 case "$runtime" in
-  node)   src=sync-agent-config.js ;;
-  python) src=sync-agent-config.py ;;
-  *)      src=sync-agent-config    ;;
+  node|bun) src=sync-agent-config.js ;;
+  python)   src=sync-agent-config.py ;;
+  *)        src=sync-agent-config    ;;
 esac
 cp "<package>/templates/$src" bin/sync-agent-config
+if [ "$runtime" = "bun" ]; then
+  # Hooks execute bin/sync-agent-config directly, so the shebang must call bun.
+  sed -i.bak '1s|env node|env bun|' bin/sync-agent-config && rm -f bin/sync-agent-config.bak
+fi
 chmod +x bin/sync-agent-config
 ```
 

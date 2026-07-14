@@ -21,10 +21,10 @@ SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # interpreter found on this machine, preferring the Ruby reference.
 resolve_runtime() {
   case "$1" in
-    ruby|node|python) echo "$1"; return ;;
+    ruby|node|python|bun) echo "$1"; return ;;
   esac
   local candidate
-  for candidate in ruby node python3; do
+  for candidate in ruby node python3 bun; do
     if command -v "$candidate" >/dev/null 2>&1; then
       [[ "$candidate" == "python3" ]] && echo "python" || echo "$candidate"
       return
@@ -33,18 +33,20 @@ resolve_runtime() {
   echo "ruby"
 }
 
-# Template file + interpreter binary for a concrete runtime.
+# Template file + interpreter binary for a concrete runtime. Bun runs the same
+# source as the Node port.
 runtime_template() {
   case "$1" in
-    node)   echo "sync-agent-config.js" ;;
-    python) echo "sync-agent-config.py" ;;
-    *)      echo "sync-agent-config"    ;;
+    node|bun) echo "sync-agent-config.js" ;;
+    python)   echo "sync-agent-config.py" ;;
+    *)        echo "sync-agent-config"    ;;
   esac
 }
 
 runtime_interpreter() {
   case "$1" in
     node)   echo "node"    ;;
+    bun)    echo "bun"     ;;
     python) echo "python3" ;;
     *)      echo "ruby"    ;;
   esac
@@ -251,8 +253,9 @@ TOOLS_DISPLAY=${TOOLS_DISPLAY%, }
 
 # ── 4. Sync runtime ───────────────────────────────────────────────────────────
 # bin/sync-agent-config ships in three interpreter ports (Ruby reference, Node,
-# Python). They are behaviourally identical; pick the one whose runtime the
-# project's machines already have. "auto" resolves to the first found here.
+# Python); Bun runs the Node source. They are behaviourally identical; pick the
+# one whose runtime the project's machines already have. "auto" resolves to the
+# first found here.
 section "🧰 Which runtime should run bin/sync-agent-config?"
 muted "all ports are equivalent — auto picks the first interpreter found on this machine"
 
@@ -260,11 +263,13 @@ RUNTIME_RAW=$("$GUM" choose \
   "auto — detect an available runtime (recommended)" \
   "ruby — reference implementation" \
   "node — Node.js port" \
+  "bun — Node port on the Bun runtime" \
   "python — Python 3 port")
 
 case "$RUNTIME_RAW" in
   ruby*)   RUNTIME_CHOICE="ruby"   ;;
   node*)   RUNTIME_CHOICE="node"   ;;
+  bun*)    RUNTIME_CHOICE="bun"    ;;
   python*) RUNTIME_CHOICE="python" ;;
   *)       RUNTIME_CHOICE="auto"   ;;
 esac

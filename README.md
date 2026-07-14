@@ -21,9 +21,9 @@ The interactive installer asks:
 - **Generation platforms** — which platforms `sync-agent-config` generates for:
   Cursor, Claude Code, Codex, opencode (multi-select, saved as your default)
 - **Sync runtime** — which interpreter runs `bin/sync-agent-config`: `auto`
-  (default — detects an available runtime), `ruby`, `node`, or `python`. All
-  three ports are behaviourally identical; pick one whose runtime your machines
-  already have.
+  (default — detects an available runtime), `ruby`, `node`, `bun`, or `python`.
+  All ports are behaviourally identical (`bun` runs the Node port); pick one
+  whose runtime your machines already have.
 
 To install into a tool without the interactive prompt (example for Cursor + opencode):
 
