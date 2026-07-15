@@ -53,6 +53,34 @@ class UpdateScriptTest < SyncTestCase
     assert_includes out, "bin/sync-agent-config already up to date"
   end
 
+  def test_installs_self_updater_when_missing
+    write_project(File.join("bin", "sync-agent-config"), "outdated\n")
+    refute generated?("bin/sync-agent-update")
+
+    out, _err, status = run_update("--runtime", sync_runtime_name)
+    assert status.success?
+
+    assert_includes out, "bin/sync-agent-update installed"
+    expected = File.read(File.join(SKILL_ROOT, "templates", runtime[:update_template]))
+    expected = expected.sub("env node", "env bun") if runtime[:shebang]
+    assert_equal expected, generated("bin/sync-agent-update")
+    assert File.executable?(File.join(@project, "bin", "sync-agent-update"))
+  end
+
+  def test_updates_self_updater_when_present
+    write_project(File.join("bin", "sync-agent-config"), "outdated\n")
+    write_project(File.join("bin", "sync-agent-update"), "outdated\n")
+
+    out, _err, status = run_update("--runtime", sync_runtime_name)
+    assert status.success?
+
+    assert_includes out, "bin/sync-agent-update updated"
+    expected = File.read(File.join(SKILL_ROOT, "templates", runtime[:update_template]))
+    expected = expected.sub("env node", "env bun") if runtime[:shebang]
+    assert_equal expected, generated("bin/sync-agent-update")
+    assert File.executable?(File.join(@project, "bin", "sync-agent-update"))
+  end
+
   def test_updates_sync_on_edit_hook_when_present
     write_project(File.join("bin", "sync-agent-config"), "outdated\n")
     write_project(File.join(".agents", "hooks", "sync-on-edit.sh"), "#!/bin/bash\necho outdated\n")

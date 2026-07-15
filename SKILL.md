@@ -276,16 +276,18 @@ Ruby reference when unset):
 # runtime → template: ruby=sync-agent-config, node|bun=sync-agent-config.js, python=sync-agent-config.py
 runtime="$(python3 -c 'import json,os,sys;print(json.load(open(os.path.expanduser("~/.config/agent-rules-skill/config.json"))).get("runtime","ruby"))' 2>/dev/null || echo ruby)"
 case "$runtime" in
-  node|bun) src=sync-agent-config.js ;;
-  python)   src=sync-agent-config.py ;;
-  *)        src=sync-agent-config    ;;
+  node|bun) src=sync-agent-config.js; upd=sync-agent-update.js ;;
+  python)   src=sync-agent-config.py; upd=sync-agent-update.py ;;
+  *)        src=sync-agent-config;    upd=sync-agent-update    ;;
 esac
 cp "<package>/templates/$src" bin/sync-agent-config
+cp "<package>/templates/$upd" bin/sync-agent-update
 if [ "$runtime" = "bun" ]; then
-  # Hooks execute bin/sync-agent-config directly, so the shebang must call bun.
+  # Hooks execute the scripts directly, so the shebang must call bun.
   sed -i.bak '1s|env node|env bun|' bin/sync-agent-config && rm -f bin/sync-agent-config.bak
+  sed -i.bak '1s|env node|env bun|' bin/sync-agent-update && rm -f bin/sync-agent-update.bak
 fi
-chmod +x bin/sync-agent-config
+chmod +x bin/sync-agent-config bin/sync-agent-update
 ```
 
 The destination is always `bin/sync-agent-config`; the copied file's shebang
@@ -294,8 +296,16 @@ same installer preferences automatically.
 
 To refresh the executables of an already-bootstrapped project after the skill
 is upgraded, run `<package>/update.sh <project-path>` — it re-copies
-`bin/sync-agent-config` (honoring the configured runtime) and
-`.agents/hooks/sync-on-edit.sh` without touching any project source.
+`bin/sync-agent-config`, `bin/sync-agent-update` (honoring the configured
+runtime; installed when missing) and `.agents/hooks/sync-on-edit.sh` without
+touching any project source.
+
+`bin/sync-agent-update` does the same directly from GitHub — no local skill
+needed: it pins the repo's latest release (or `--ref <tag|branch>`), verifies
+downloads against the release's `SHA256SUMS` when published, lists the changes
+and asks a y/n confirmation before writing (EOF answers n, so nothing is ever
+applied silently). State is recorded under the `update` namespace of
+`bin/sync-agent-config-options.json`.
 
 When an adapter's canonical source is deleted, the next sync offers to remove
 each stale generated file with a `y/n/a/i/q` prompt (`y` remove, `n` keep,

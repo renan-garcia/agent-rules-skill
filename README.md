@@ -108,7 +108,8 @@ bin/sync-agent-config --check
 ### Updating a project's executables
 
 After upgrading the skill, refresh the executables a project copied from it
-(`bin/sync-agent-config` and `.agents/hooks/sync-on-edit.sh`) with:
+(`bin/sync-agent-config`, `bin/sync-agent-update` and
+`.agents/hooks/sync-on-edit.sh`) with:
 
 ```bash
 etc/agent-rules-skill/update.sh                            # interactive wizard (like install.sh)
@@ -118,7 +119,22 @@ etc/agent-rules-skill/update.sh /path/to/project --runtime bun
 
 Run without arguments on a terminal to get a step-by-step wizard (project path,
 runtime, review, confirm). Non-interactive runs without a path default to the
-current directory.
+current directory. `bin/sync-agent-update` is installed when the project does
+not have it yet.
+
+Projects can also update themselves straight from GitHub — no local skill
+required:
+
+```bash
+bin/sync-agent-update                  # latest release, lists changes, asks y/n
+bin/sync-agent-update --check          # dry-run; exit 1 when updates exist
+bin/sync-agent-update --ref main       # pin a tag or branch
+bin/sync-agent-update --yes            # apply without prompting
+```
+
+It detects each executable's port from its shebang, verifies downloads against
+the release's `SHA256SUMS` when published (`rake checksums` generates it before
+tagging), and never writes without confirmation (EOF answers no).
 
 Project sources (`AGENTS.md`, `.agents/**`, `bin/sync-agent-config-options.json`)
 are never touched. The update is idempotent and reports each file as updated or
@@ -144,6 +160,9 @@ agent-rules-skill/
 │   ├── sync-agent-config           ← sync script, Ruby reference (copy to bin/)
 │   ├── sync-agent-config.js        ← sync script, Node port (equivalent)
 │   ├── sync-agent-config.py        ← sync script, Python 3 port (equivalent)
+│   ├── sync-agent-update           ← self-updater from GitHub, Ruby reference
+│   ├── sync-agent-update.js        ← self-updater, Node port (equivalent)
+│   ├── sync-agent-update.py        ← self-updater, Python 3 port (equivalent)
 │   ├── sync-on-edit.sh             ← shell hook: auto-sync on .agents/** edit (Cursor/Claude/Codex)
 │   ├── pre-commit                  ← Git hook: block commits when adapters drift
 │   ├── AGENTS.md.template          ← project entrypoint template

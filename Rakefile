@@ -38,4 +38,16 @@ namespace :test do
   task parity: %w[ruby python node bun]
 end
 
+# bin/sync-agent-update verifies downloads against this manifest when it is
+# published with a release. Regenerate before tagging.
+desc "Generate the SHA256SUMS manifest for a release"
+task :checksums do
+  require "digest"
+  lines = Dir["templates/*"].sort.select { |f| File.file?(f) }.map do |f|
+    "#{Digest::SHA256.hexdigest(File.read(f))}  #{f}"
+  end
+  File.write("SHA256SUMS", lines.join("\n") + "\n")
+  puts "SHA256SUMS written (#{lines.length} files)"
+end
+
 task default: :test

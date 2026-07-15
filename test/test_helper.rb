@@ -20,10 +20,11 @@ class SyncTestCase < Minitest::Test
   # Bun runs the Node port; the installer rewrites the shebang to bun, mirrored
   # here in setup.
   RUNTIMES = {
-    "ruby"   => { interpreter: "ruby",    template: "sync-agent-config" },
-    "python" => { interpreter: "python3", template: "sync-agent-config.py" },
-    "node"   => { interpreter: "node",    template: "sync-agent-config.js" },
-    "bun"    => { interpreter: "bun",     template: "sync-agent-config.js", shebang: "#!/usr/bin/env bun" }
+    "ruby"   => { interpreter: "ruby",    template: "sync-agent-config",    update_template: "sync-agent-update" },
+    "python" => { interpreter: "python3", template: "sync-agent-config.py", update_template: "sync-agent-update.py" },
+    "node"   => { interpreter: "node",    template: "sync-agent-config.js", update_template: "sync-agent-update.js" },
+    "bun"    => { interpreter: "bun",     template: "sync-agent-config.js", update_template: "sync-agent-update.js",
+                  shebang: "#!/usr/bin/env bun" }
   }.freeze
 
   def runtime

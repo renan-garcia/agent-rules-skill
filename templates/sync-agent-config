@@ -78,7 +78,8 @@ end
 PLATFORMS = resolve_platforms.freeze
 
 if PLATFORMS.empty?
-  warn "No valid platform resolved (expected: #{ALL_PLATFORMS.join(", ")})."
+  # $stderr.puts, not Kernel#warn: warn is silenced under RUBYOPT=-W0.
+  $stderr.puts "No valid platform resolved (expected: #{ALL_PLATFORMS.join(", ")})."
   exit 1
 end
 

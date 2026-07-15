@@ -59,6 +59,14 @@ runtime_template() {
   esac
 }
 
+updater_template() {
+  case "$1" in
+    node|bun) echo "sync-agent-update.js" ;;
+    python)   echo "sync-agent-update.py" ;;
+    *)        echo "sync-agent-update"    ;;
+  esac
+}
+
 runtime_interpreter() {
   case "$1" in
     node)   echo "node"    ;;
@@ -227,7 +235,7 @@ if [[ -z "$PROJECT_DIR" ]] && [[ -t 0 ]]; then
   section "🔎 Review"
   kv "Project" "$PROJECT_DIR"
   kv "Runtime" "$RUNTIME_PREVIEW"
-  kv "Updates" "bin/sync-agent-config · .agents/hooks/sync-on-edit.sh"
+  kv "Updates" "bin/sync-agent-config · bin/sync-agent-update · .agents/hooks/sync-on-edit.sh"
   echo
 
   if ! "$GUM" confirm "Update this project?"; then
@@ -265,15 +273,22 @@ fi
 
 # ── Update ────────────────────────────────────────────────────────────────────
 
-# Stage the template so runtime-specific tweaks (bun shebang) happen before the
+# Stage templates so runtime-specific tweaks (bun shebang) happen before the
 # copy/compare, keeping reruns idempotent.
-STAGED="$(mktemp)"
-trap 'rm -f "$STAGED"' EXIT
-cp "$TEMPLATE" "$STAGED"
-if [[ "$RUNTIME" == "bun" ]]; then
-  # Hooks execute bin/sync-agent-config directly, so the shebang must call bun.
-  sed -i.bak '1s|env node|env bun|' "$STAGED" && rm -f "$STAGED.bak"
-fi
+STAGE_DIR="$(mktemp -d)"
+trap 'rm -rf "$STAGE_DIR"' EXIT
+
+stage_template() { # <template-basename> — echoes the staged path
+  local dst="$STAGE_DIR/$1"
+  cp "$SKILL_DIR/templates/$1" "$dst"
+  if [[ "$RUNTIME" == "bun" ]]; then
+    # Hooks execute the scripts directly, so the shebang must call bun.
+    sed -i.bak '1s|env node|env bun|' "$dst" && rm -f "$dst.bak"
+  fi
+  echo "$dst"
+}
+
+STAGED="$(stage_template "$(runtime_template "$RUNTIME")")"
 
 update_file() { # <staged-src> <dst> <label>
   local src="$1" dst="$2" label="$3"
@@ -289,6 +304,17 @@ update_file() { # <staged-src> <dst> <label>
 
 [[ -n "$GUM" ]] || echo "Updating project executables in $PROJECT_DIR [runtime: $RUNTIME]"
 update_file "$STAGED" "$SYNC_TARGET" "bin/sync-agent-config"
+
+# Installed when missing: projects bootstrapped before the self-updater
+# existed only ever gain it through this script.
+UPDATER_TARGET="$PROJECT_DIR/bin/sync-agent-update"
+if [[ -f "$UPDATER_TARGET" ]]; then
+  update_file "$(stage_template "$(updater_template "$RUNTIME")")" "$UPDATER_TARGET" "bin/sync-agent-update"
+else
+  cp "$(stage_template "$(updater_template "$RUNTIME")")" "$UPDATER_TARGET"
+  chmod +x "$UPDATER_TARGET"
+  say_success "bin/sync-agent-update installed"
+fi
 
 HOOK_TARGET="$PROJECT_DIR/.agents/hooks/sync-on-edit.sh"
 if [[ -f "$HOOK_TARGET" ]]; then

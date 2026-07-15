@@ -1,0 +1,259 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# sync-agent-update
+#
+# Updates this project's vendored agent executables straight from the
+# agent-rules-skill repository (or a local checkout):
+#   bin/sync-agent-config          (port matching its shebang)
+#   bin/sync-agent-update          (itself)
+#   .agents/hooks/sync-on-edit.sh  (only when the project has it)
+#
+# Nothing is applied without a y/n confirmation (single keypress on a TTY;
+# EOF answers n, so non-interactive runs never write silently). Downloads are
+# verified against the source's SHA256SUMS when it is published. State lives
+# under the "update" namespace of bin/sync-agent-config-options.json.
+
+require "digest"
+require "fileutils"
+require "json"
+require "net/http"
+require "uri"
+
+ROOT         = File.expand_path("..", __dir__)
+SELF_PATH    = File.expand_path(__FILE__)
+OPTIONS_FILE = File.join(ROOT, "bin", "sync-agent-config-options.json")
+DEFAULT_REPO = "renan-garcia/agent-rules-skill"
+
+USAGE = <<~TXT
+  sync-agent-update — update this project's vendored agent executables
+
+  Updates bin/sync-agent-config, bin/sync-agent-update (itself) and
+  .agents/hooks/sync-on-edit.sh from the agent-rules-skill repository.
+
+  Usage:
+    bin/sync-agent-update                    # list changes and confirm with y/n
+    bin/sync-agent-update --check            # dry-run; exit 1 when updates exist
+    bin/sync-agent-update --yes              # apply without prompting
+    bin/sync-agent-update --ref <tag|branch> # pin the source ref
+    bin/sync-agent-update --repo owner/name  # update from a fork
+    bin/sync-agent-update --source <dir|url> # alternate source (offline/tests)
+
+  The ref resolves from --ref, then the ref saved in
+  bin/sync-agent-config-options.json, then the repo's latest GitHub release.
+  Downloads are verified against the source's SHA256SUMS when published.
+TXT
+
+CHECK = ARGV.include?("--check")
+YES   = ARGV.include?("--yes")
+
+if ARGV.include?("-h") || ARGV.include?("--help")
+  puts USAGE
+  exit 0
+end
+
+def flag_value(name)
+  if (eq = ARGV.find { |a| a.start_with?("#{name}=") })
+    return eq.sub("#{name}=", "")
+  end
+  idx = ARGV.index(name)
+  idx && ARGV[idx + 1] && !ARGV[idx + 1].start_with?("--") ? ARGV[idx + 1] : nil
+end
+
+# ── Options file (shared with bin/sync-agent-config) ──────────────────────────
+
+def json_file(data)
+  "#{JSON.pretty_generate(data)}\n"
+end
+
+def load_options
+  return {} unless File.exist?(OPTIONS_FILE)
+
+  JSON.parse(File.read(OPTIONS_FILE)) rescue {}
+end
+
+def save_options(options)
+  FileUtils.mkdir_p(File.dirname(OPTIONS_FILE))
+  File.write(OPTIONS_FILE, json_file(options))
+end
+
+# ── HTTP ──────────────────────────────────────────────────────────────────────
+
+def http_get(url, limit = 5)
+  abort "Too many redirects fetching #{url}" if limit.zero?
+
+  uri = URI(url)
+  res = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") do |http|
+    http.get(uri.request_uri, { "User-Agent" => "sync-agent-update" })
+  end
+  case res
+  when Net::HTTPSuccess     then res.body
+  when Net::HTTPRedirection then http_get(res["location"], limit - 1)
+  when Net::HTTPNotFound    then nil
+  else abort "HTTP #{res.code} fetching #{url}"
+  end
+rescue SocketError, SystemCallError, IOError => e
+  abort "Network error fetching #{url}: #{e.message}"
+end
+
+# ── Interaction ───────────────────────────────────────────────────────────────
+
+# One answer from the user. On a TTY, reads a single raw keypress (echoed back
+# with a newline so the transcript stays clean); otherwise reads a line, so
+# piped stdin still works. EOF and Ctrl-C/Ctrl-D answer n (the safe default).
+def read_answer
+  unless $stdin.tty?
+    line = $stdin.gets
+    return line ? line.strip.downcase : "n"
+  end
+
+  require "io/console"
+  char = $stdin.getch
+  char = "n" if char.nil? || char == "\u0003" || char == "\u0004"
+  answer = char.strip.downcase
+  puts(answer =~ /\A[a-z]\z/ ? answer : "")
+  answer
+end
+
+# ── Source resolution ─────────────────────────────────────────────────────────
+
+options     = load_options
+update_opts = options["update"].is_a?(Hash) ? options["update"] : {}
+
+source = flag_value("--source")
+repo   = flag_value("--repo") || update_opts["repo"] || DEFAULT_REPO
+ref    = flag_value("--ref")  || update_opts["ref"]
+
+if source
+  if source =~ %r{\Ahttps?://}
+    base         = source.chomp("/")
+    fetch        = ->(p) { http_get("#{base}/#{p}") }
+    source_label = base
+  else
+    dir = File.expand_path(source)
+    abort "Invalid --source directory: #{source}" unless File.directory?(dir)
+    fetch        = ->(p) { f = File.join(dir, p); File.exist?(f) ? File.read(f) : nil }
+    source_label = "#{dir} (local)"
+  end
+else
+  if ref.nil?
+    body = http_get("https://api.github.com/repos/#{repo}/releases/latest")
+    ref  = body && (JSON.parse(body)["tag_name"] rescue nil)
+    abort "No release found for #{repo}. Pass --ref <tag-or-branch> (e.g. --ref main)." unless ref
+  end
+  base         = "https://raw.githubusercontent.com/#{repo}/#{ref}"
+  fetch        = ->(p) { http_get("#{base}/#{p}") }
+  source_label = "#{repo}@#{ref}"
+end
+
+# ── Targets ───────────────────────────────────────────────────────────────────
+
+sync_target = File.join(ROOT, "bin", "sync-agent-config")
+unless File.exist?(sync_target)
+  abort "No bin/sync-agent-config found — this project does not look bootstrapped."
+end
+
+# The shebang of each installed executable selects the port to fetch; bun runs
+# the Node port with the shebang rewritten after download.
+def template_for(file)
+  shebang = File.open(file, &:gets).to_s
+  name    = File.basename(file)
+  if shebang.include?("bun")
+    ["templates/#{name}.js", :bun]
+  elsif shebang.include?("node")
+    ["templates/#{name}.js", nil]
+  elsif shebang.include?("python")
+    ["templates/#{name}.py", nil]
+  else
+    ["templates/#{name}", nil]
+  end
+end
+
+targets = [sync_target, SELF_PATH]
+hook    = File.join(ROOT, ".agents", "hooks", "sync-on-edit.sh")
+targets << hook if File.exist?(hook)
+
+# ── Fetch + compare ───────────────────────────────────────────────────────────
+
+sums_raw = fetch.call("SHA256SUMS")
+sums     = {}
+if sums_raw
+  sums_raw.each_line do |line|
+    m = line.strip.match(/\A(\h{64})\s+\*?(.+)\z/)
+    sums[m[2]] = m[1] if m
+  end
+else
+  # $stderr.puts, not Kernel#warn: warn is silenced under RUBYOPT=-W0.
+  $stderr.puts "⚠️  SHA256SUMS not found at #{source_label} — skipping integrity verification."
+end
+
+puts "Update source: #{source_label}"
+
+changes = []
+targets.each do |file|
+  rel = file.sub("#{ROOT}/", "")
+  template_path, transform =
+    File.basename(file) == "sync-on-edit.sh" ? ["templates/sync-on-edit.sh", nil] : template_for(file)
+
+  content = fetch.call(template_path)
+  abort "Missing #{template_path} at #{source_label} — aborting." unless content
+
+  if sums.any?
+    if sums[template_path]
+      abort "Checksum mismatch for #{template_path} — aborting." unless Digest::SHA256.hexdigest(content) == sums[template_path]
+    else
+      $stderr.puts "⚠️  No checksum for #{template_path} in SHA256SUMS."
+    end
+  end
+
+  content = content.sub("env node", "env bun") if transform == :bun
+
+  if File.read(file) == content
+    puts "  #{rel} — up to date"
+  else
+    puts "  #{rel} — update available"
+    changes << [file, rel, content]
+  end
+end
+
+if changes.empty?
+  puts "Everything is up to date. [#{source_label}]"
+  exit 0
+end
+
+if CHECK
+  puts "#{changes.length} update(s) available. Run bin/sync-agent-update to apply."
+  exit 1
+end
+
+# ── Confirm + apply ───────────────────────────────────────────────────────────
+
+unless YES
+  answer = nil
+  loop do
+    print "Apply #{changes.length} update(s)? [y/n] "
+    $stdout.flush
+    answer = read_answer
+    break if %w[y n].include?(answer)
+  end
+  if answer == "n"
+    puts "No changes applied."
+    exit 0
+  end
+end
+
+changes.each do |file, rel, content|
+  File.write(file, content)
+  FileUtils.chmod(0o755, file)
+  puts "✅ Updated #{rel}"
+end
+
+update_opts["updated_at"] = Time.now.utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+unless source
+  update_opts["repo"] = repo
+  update_opts["ref"]  = ref
+end
+options["update"] = update_opts
+save_options(options)
+
+puts "Update complete. [#{source_label}]"
